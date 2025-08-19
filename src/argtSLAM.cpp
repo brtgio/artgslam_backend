@@ -145,7 +145,6 @@ void argtSLAM::odomchatterCallback(const nav_msgs::Odometry::ConstPtr &msg)
     auxpub.setThetaAux_pub(yaw);
     theta_now = yaw;
     // Ajustar rotaciones acumuladas
-    double thetaAct = yaw;
     if (theta_now - theta_previus > M_PI) {
         completed_rotations++;
     } else if (theta_now - theta_previus < -M_PI) {
