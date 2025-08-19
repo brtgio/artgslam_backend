@@ -1,50 +1,41 @@
 #include "argtSlam.hpp"
 
-// Variables globales
-double yaw = 0.0;
-float xx = 0.0f, yy = 0.0f;
-
-// Variables para el filtro FIR (orden 40)
-static float samplesSonar_x[8][41];//(41, 0.0f);
-static float samplesSonar_y[8][41];//(41, 0.0f);
-
-// Inicialización de variables estáticas de clase
-double argtSLAM::theta_ant = 0.0;
-double argtSLAM::theta_act = 0.0;
-int argtSLAM::numRotation = 0;
-const double argtSLAM::corFactor = 1.025;
-std_msgs::Float32 yawAmigobot;
-
-  ros::Publisher yawPub;
-
 // Constructor
 argtSLAM::argtSLAM()
-    : linear_(1), angular_(0), l_scale_(0.5), a_scale_(0.5)
+    :auxpub(nh), linear_(1), angular_(0), l_scale_(0.5), a_scale_(0.5),
+      yaw(0.0), x(0.0f), y(0.0f), theta(0.0f),
+      theta_previus(0.0), theta_now(0.0), completed_rotations(0)
 {
-    nh_.param("axis_linear", linear_, linear_);
-    nh_.param("axis_angular", angular_, angular_);
-    nh_.param("scale_angular", a_scale_, a_scale_);
-    nh_.param("scale_linear", l_scale_, l_scale_);
+    // Parameters from ROS param server
+    nh.param("axis_linear", linear_, linear_);
+    nh.param("axis_angular", angular_, angular_);
+    nh.param("scale_angular", a_scale_, a_scale_);
+    nh.param("scale_linear", l_scale_, l_scale_);
 
-    sub_odom = nh_.subscribe("/RosAria/pose", 1000, odomchatterCallback);
-    vel_pub_ = nh_.advertise<geometry_msgs::Twist>("RosAria/cmd_vel", 1);
+    // Subscribers
+    sub_odom = nh.subscribe("/RosAria/pose", 1000, &argtSLAM::odomchatterCallback, this);
+    joy_sub_ = nh.subscribe<sensor_msgs::Joy>("joy", 10, &argtSLAM::joyCallback, this);
+    sonar_sub_ = nh.subscribe<sensor_msgs::PointCloud>("/RosAria/sonar", 1000, &argtSLAM::sonarChatterCallback, this);
 
-    sonarPoincloud_filter = nh_.advertise<sensor_msgs::PointCloud>("sonarPublisher_batman_filter", 1000);
-    sonarPoincloudraw = nh_.advertise<sensor_msgs::PointCloud>("sonarPublisher_brunodias_raw", 1000);
-    sonarFilterdata_bag = nh_.advertise<geometry_msgs::Point32>("sonarFilterdata_bag", 1000);
-    sonarRawdata_bag = nh_.advertise<geometry_msgs::Point32>("sonarRawdata_bag", 1000);
-    joy_sub_ = nh_.subscribe<sensor_msgs::Joy>("joy", 10, &argtSLAM::joyCallback, this);
-    sonar_sub_ = nh_.subscribe<sensor_msgs::PointCloud>("/RosAria/sonar", 1000, &argtSLAM::sonarChatterCallback, this);
-    map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/bruno/occupancy_map", 1, true);
-    yawPub = nh_.advertise<std_msgs::Float32>("yawPub", 1);
+    // Publishers
+    vel_pub_ = nh.advertise<geometry_msgs::Twist>("RosAria/cmd_vel", 1);
+    sonarPoincloud_filter = nh.advertise<sensor_msgs::PointCloud>("sonarPublisher_batman_filter", 1000);
+    sonarPoincloudraw = nh.advertise<sensor_msgs::PointCloud>("sonarPublisher_brunodias_raw", 1000);
+    sonarFilterdata_bag = nh.advertise<geometry_msgs::Point32>("sonarFilterdata_bag", 1000);
+    sonarRawdata_bag = nh.advertise<geometry_msgs::Point32>("sonarRawdata_bag", 1000);
+    map_pub_ = nh.advertise<nav_msgs::OccupancyGrid>("/bruno/occupancy_map", 1, true);
+    yawPub = nh.advertise<std_msgs::Float32>("yawPub", 1);
 
+    // Set frame_id for sonar pointclouds
     std::string frame_id_sonar = "sonar";
     pointCLoudVector_filter.header.frame_id = frame_id_sonar;
     pointCLoudVector_raw.header.frame_id = frame_id_sonar;
 
+    // Init grid map and sonar samples
     gridMap.resize(1000, std::vector<int>(1000, 0));
     initSampleSonar();
 }
+
 
 // Callback de joystick
 void argtSLAM::joyCallback(const sensor_msgs::Joy::ConstPtr &joy)
@@ -86,14 +77,14 @@ void argtSLAM::sonarChatterCallback(const sensor_msgs::PointCloud::ConstPtr &msg
         p_r0.z = 0;
 
         // Publicación sin filtrar
-        sonarRaw.x = p_r0.x + xx;
-        sonarRaw.y = p_r0.y + yy;
+        sonarRaw.x = p_r0.x + x;
+        sonarRaw.y = p_r0.y + y;
         sonarRawdata_bag.publish(sonarRaw);
 
         // Aplicar filtro FIR
         firFilter(i,p_r0.x, p_r0.y, &filter_xk, &filter_yk);
-        p_filter.x = filter_xk + xx;
-        p_filter.y = filter_yk + yy;
+        p_filter.x = filter_xk + x;
+        p_filter.y = filter_yk + y;
 
         sonarFilter.x = p_filter.x;
         sonarFilter.y = p_filter.y;
@@ -136,37 +127,52 @@ void argtSLAM::sonarChatterCallback(const sensor_msgs::PointCloud::ConstPtr &msg
 // Callback de odometría
 void argtSLAM::odomchatterCallback(const nav_msgs::Odometry::ConstPtr &msg)
 {
-    xx = msg->pose.pose.position.x;
-    yy = msg->pose.pose.position.y;
 
+    // Actualizar posición
+    x = msg->pose.pose.position.x;
+    y = msg->pose.pose.position.y;
+
+    // Extraer orientación del cuaternión
     tf::Quaternion q(
         msg->pose.pose.orientation.x,
         msg->pose.pose.orientation.y,
         msg->pose.pose.orientation.z,
         msg->pose.pose.orientation.w);
+
     tf::Matrix3x3 m(q);
     double roll, pitch;
     m.getRPY(roll, pitch, yaw);
+    auxpub.setThetaAux_pub(yaw);
+    theta_now = yaw;
+    // Ajustar rotaciones acumuladas
+    double thetaAct = yaw;
+    if (theta_now - theta_previus > M_PI) {
+        completed_rotations++;
+    } else if (theta_now - theta_previus < -M_PI) {
+        completed_rotations--;
+    }
 
-    double theta_act = yaw;
-    if (theta_act - theta_ant > M_PI) numRotation++;
-    else if (theta_act - theta_ant < -M_PI) numRotation--;
+    double thetaRamp = (2 * M_PI * completed_rotations + theta_now) * corFactor_;
+    auxpub.setThetaRamp(thetaRamp);
+    theta_previus = theta_now;
 
-    double theta_ramp = (2 * M_PI * numRotation + theta_act) * corFactor;
-    theta_ant = theta_act;
+    // Normalizar ángulo entre -π y π
+    double thetaNorm = fmod(thetaRamp, 2 * M_PI);
+    if (thetaNorm > M_PI) {
+        thetaNorm -= 2 * M_PI;
+    } else if (thetaNorm < -M_PI) {
+        thetaNorm += 2 * M_PI;
+    }
 
-    double theta_t = fmod(theta_act, 2 * M_PI);
-    if (theta_t > M_PI) theta_t -= 2 * M_PI;
-    else if (theta_t < -M_PI) theta_t += 2 * M_PI;
+    yaw = thetaNorm;
+    auxpub.thetaCorrect(yaw);
 
-    yaw = theta_t;
 
-    yawAmigobot.data = yaw;
 
-    yawPub.publish(yawAmigobot);
-
-    ROS_INFO("Pose actual: x = %.2f | y = %.2f | yaw = %.2f rad", xx, yy, yaw);
+    // Log de la pose
+    ROS_INFO("Pose actual: x = %.2f | y = %.2f | yaw = %.2f rad", x, y, yaw);
 }
+
 
 // Filtro FIR
 void argtSLAM::firFilter(int numSonar,float x, float y, float *filter_xk, float *filter_yk)

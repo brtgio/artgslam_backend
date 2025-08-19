@@ -1,5 +1,4 @@
-#ifndef ARGTSLAM_HPP
-#define ARGTSLAM_HPP
+#pragma once
 #include <ros/ros.h>
 #include <geometry_msgs/Twist.h>
 #include <sensor_msgs/Joy.h>
@@ -15,60 +14,62 @@
 #include <nav_msgs/OccupancyGrid.h>
 #include<array>
 #include <std_msgs/Float32.h>
+#include "AuxPublishers.hpp"
 
 
 // Clase principal
 class argtSLAM
 {
 public:
-  argtSLAM();
+    argtSLAM();
 
 private:
-  void joyCallback(const sensor_msgs::Joy::ConstPtr &joy);
-  void sonarChatterCallback(const sensor_msgs::PointCloud::ConstPtr &msg);
-  static void odomchatterCallback(const nav_msgs::Odometry::ConstPtr &msg);
+    AuxPublishers auxpub;
 
-  ros::NodeHandle nh_;
-  int linear_, angular_;
-  double l_scale_, a_scale_;
+    void joyCallback(const sensor_msgs::Joy::ConstPtr &joy);
+    void sonarChatterCallback(const sensor_msgs::PointCloud::ConstPtr &msg);
+    void odomchatterCallback(const nav_msgs::Odometry::ConstPtr &msg);
 
-  ros::Publisher vel_pub_;
-  ros::Subscriber joy_sub_;
-  ros::Subscriber sonar_sub_;
-  ros::Subscriber sub_odom;
-  ros::Publisher sonarPoincloud_filter;
-  ros::Publisher sonarPoincloudraw;
-  ros::Publisher sonarFilterdata_bag;
-  ros::Publisher sonarRawdata_bag;
-  ros::Publisher map_pub_;  // Publisher para el mapa
+    // Node stuff
+    ros::NodeHandle nh;
+    ros::Publisher vel_pub_, sonarPoincloud_filter, sonarPoincloudraw;
+    ros::Publisher sonarFilterdata_bag, sonarRawdata_bag, map_pub_, yawPub;
+    ros::Subscriber joy_sub_, sonar_sub_, sub_odom;
 
+    // Robot state
+    double yaw = 0.0;
+    float x = 0.0f, y = 0.0f, theta = 0.0f;
 
-  sensor_msgs::PointCloud pointCLoudVector_filter;
-  sensor_msgs::PointCloud pointCLoudVector_raw;
-  geometry_msgs::Point32 sonarRaw;
-  geometry_msgs::Point32 sonarFilter;
-  nav_msgs::OccupancyGrid occupancy_grid_;
+    // FIR filter buffers
+    float samplesSonar_x[8][41];
+    float samplesSonar_y[8][41];
 
+    // For odometry correction
 
-  // Data Processing functions
-  void firFilter(int i,float x, float y, float *filter_xk, float *filter_yk);
+        //auxiliary variables
+    float theta_previus = 0;
+    float theta_now = 0;
+    float completed_rotations = 0;
+    const double corFactor_ = 1.025;
 
-  // Variables for correcting angular measurements
-  static double theta_ant;
-  static double theta_act;
-  static int numRotation;
-  static const double corFactor; // Ramp correction factor (can stay initialized here)
-  
-  //Variables for making a grid map
-   std::vector<std::vector<int>> gridMap;
-  void xy2Grid(const double& x, const double& y, int& xGrid, int& yGrid);
-  void fillGrid(int xGrid, int yGrid);
-  void publishMap();
-  void initSampleSonar();
+    //joystick parameters  int linear_, angular_;
+    double l_scale_, a_scale_,linear_,angular_;
 
+    // Messages
+    sensor_msgs::PointCloud pointCLoudVector_filter, pointCLoudVector_raw;
+    geometry_msgs::Point32 sonarRaw, sonarFilter;
+    nav_msgs::OccupancyGrid occupancy_grid_;
+    std_msgs::Float32 yawAmigobot;
+
+    // Grid map
+    std::vector<std::vector<int>> gridMap;
+
+    // Helpers
+    void firFilter(int numSonar, float x, float y, float *filter_xk, float *filter_yk);
+    void xy2Grid(const double& x, const double& y, int& xGrid, int& yGrid);
+    void fillGrid(int xGrid, int yGrid);
+    void publishMap();
+    void initSampleSonar();
 };
-
-#endif // ARGTSLAM_HPP
-
 
 

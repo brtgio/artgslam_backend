@@ -209,5 +209,5 @@ include_directories(
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
 
-add_executable(artgSLAM src/main.cpp src/argtSLAM.cpp )
+add_executable(artgSLAM src/main.cpp src/argtSLAM.cpp src/AuxPublishers.cpp )
 target_link_libraries(artgSLAM ${catkin_LIBRARIES})
